@@ -4,6 +4,9 @@ import { authOptions } from '@/lib/auth';
 import { connectToDB } from '@/lib/database';
 import Cart from '@/models/Cart';
 
+// Force dynamic rendering for this route
+export const dynamic = 'force-dynamic';
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }

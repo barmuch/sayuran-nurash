@@ -107,6 +107,39 @@ After seeding the database, you can log in as admin:
 - **Username**: `admin`
 - **Password**: `admin123`
 
+**Important for Production:**
+Make sure you change these credentials after deployment by:
+1. Creating a new admin user through the registration
+2. Manually updating the database
+3. Or using a database management tool
+
+## Production Deployment Notes
+
+### Vercel Environment Variables
+
+When deploying to Vercel, make sure to set these environment variables:
+
+```env
+MONGODB_URI=your-production-mongodb-uri
+NEXTAUTH_SECRET=your-super-secret-key-minimum-32-characters
+NEXTAUTH_URL=https://your-app-name.vercel.app
+```
+
+**Critical:** 
+- `NEXTAUTH_URL` must match your production domain exactly
+- `NEXTAUTH_SECRET` must be at least 32 characters long
+- Make sure MongoDB allows connections from Vercel's IP ranges
+
+### Troubleshooting Authentication Issues
+
+If you can login but get redirected when accessing admin pages:
+
+1. **Check Environment Variables**: Ensure `NEXTAUTH_URL` matches your domain
+2. **Check Browser Console**: Look for authentication errors
+3. **Check Vercel Logs**: Look for server-side authentication errors
+4. **Clear Browser Cookies**: Old cookies might conflict
+5. **Verify Session**: Check if role is properly set in the session
+
 ## Project Structure
 
 ```

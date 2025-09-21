@@ -6,6 +6,9 @@ import Cart from '@/models/Cart';
 import Order from '@/models/Order';
 import Product from '@/models/Product';
 
+// Force dynamic rendering for this route
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);

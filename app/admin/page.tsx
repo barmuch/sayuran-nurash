@@ -93,13 +93,25 @@ export default function AdminDashboard() {
 
   // Redirect if not admin
   useEffect(() => {
+    console.log('Admin page - Session status:', status);
+    console.log('Admin page - Session data:', session);
+    console.log('Admin page - User role:', session?.user?.role);
+    
     if (status === 'loading') return;
     
-    if (!session || session.user.role !== 'admin') {
+    if (!session) {
+      console.log('No session found, redirecting to home');
       router.push('/');
       return;
     }
 
+    if (session.user.role !== 'admin') {
+      console.log('User is not admin, redirecting to home');
+      router.push('/');
+      return;
+    }
+
+    console.log('Admin access granted, fetching data');
     fetchProducts();
     fetchOrders();
   }, [session, status, router]);

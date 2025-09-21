@@ -5,6 +5,9 @@ import { connectToDB } from '@/lib/database';
 import Cart from '@/models/Cart';
 import Product from '@/models/Product';
 
+// Force dynamic rendering for this route
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);

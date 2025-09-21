@@ -4,6 +4,9 @@ import { authOptions } from '@/lib/auth';
 import { connectToDB } from '@/lib/database';
 import Product from '@/models/Product';
 
+// Force dynamic rendering for this route
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     await connectToDB();
