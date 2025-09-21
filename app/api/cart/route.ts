@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
-import { authOptions } from '../auth/[...nextauth]/route';
+import { authOptions } from '@/lib/auth';
 import { connectToDB } from '@/lib/database';
 import Cart from '@/models/Cart';
 import Product from '@/models/Product';
@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     // Check if item already exists in cart
     const existingItemIndex = cart.items.findIndex(
-      item => item.productId.toString() === productId
+      (item: any) => item.productId.toString() === productId
     );
 
     if (existingItemIndex > -1) {
