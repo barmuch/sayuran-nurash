@@ -28,15 +28,18 @@ export const authOptions: AuthOptions = {
           });
 
           if (!user) {
+            console.log('User not found:', credentials.username);
             return null;
           }
 
           const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
 
           if (!isPasswordValid) {
+            console.log('Invalid password for user:', credentials.username);
             return null;
           }
 
+          console.log('Login successful for user:', user.username, 'with role:', user.role);
           return {
             id: user._id.toString(),
             username: user.username,
@@ -44,7 +47,7 @@ export const authOptions: AuthOptions = {
             role: user.role,
           };
         } catch (error) {
-          console.error('Auth error:', error);
+          console.log('Auth error:', error);
           return null;
         }
       }
@@ -52,13 +55,30 @@ export const authOptions: AuthOptions = {
   ],
   session: {
     strategy: 'jwt',
-    maxAge: 24 * 60 * 60, // 24 hours
+    maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   jwt: {
-    maxAge: 24 * 60 * 60, // 24 hours
+    maxAge: 30 * 24 * 60 * 60, // 30 days
+  },
+  cookies: {
+    sessionToken: {
+      name: process.env.NODE_ENV === 'production' 
+        ? '__Secure-next-auth.session-token'
+        : 'next-auth.session-token',
+      options: {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        secure: process.env.NODE_ENV === 'production',
+        domain: process.env.NODE_ENV === 'production' 
+          ? '.vercel.app' 
+          : undefined
+      }
+    }
   },
   callbacks: {
     async jwt({ token, user }) {
+      console.log('JWT callback - user:', user, 'token role:', token.role);
       if (user) {
         token.role = user.role;
         token.username = user.username;
@@ -66,17 +86,19 @@ export const authOptions: AuthOptions = {
       return token;
     },
     async session({ session, token }) {
+      console.log('Session callback - token:', token, 'session before:', session);
       if (token) {
         session.user.id = token.sub!;
         session.user.role = token.role as string;
         session.user.username = token.username as string;
       }
+      console.log('Session callback - session after:', session);
       return session;
     },
   },
   pages: {
     signIn: '/auth/signin',
   },
-  debug: process.env.NODE_ENV === 'development',
+  debug: true, // Enable debug for production troubleshooting
   secret: process.env.NEXTAUTH_SECRET,
 };
