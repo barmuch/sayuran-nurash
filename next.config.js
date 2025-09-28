@@ -43,6 +43,12 @@ const nextConfig = {
         hostname: 'pbs.twimg.com',
         port: '',
         pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'tribratanews.polri.go.id',
+        port: '',
+        pathname: '/**',
       }
     ],
   },
