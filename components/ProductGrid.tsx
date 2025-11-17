@@ -99,10 +99,10 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
         {[...Array(8)].map((_, i) => (
           <div key={i} className="bg-white rounded-lg shadow-md p-4 animate-pulse">
-            <div className="w-full h-48 bg-gray-200 rounded-lg mb-4"></div>
+            <div className="w-full h-40 sm:h-48 bg-gray-200 rounded-lg mb-4"></div>
             <div className="h-4 bg-gray-200 rounded mb-2"></div>
             <div className="h-4 bg-gray-200 rounded w-3/4"></div>
           </div>
@@ -114,10 +114,10 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
   return (
     <div>
       {/* Products Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 mb-8">
         {products.map((product) => (
-          <div key={product._id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
-              <div className="relative h-48 w-full">
+          <div key={product._id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow flex flex-col">
+              <div className="relative h-40 sm:h-48 w-full flex-shrink-0">
                 <Image
                   src={product.imageUrl}
                   alt={product.name}
@@ -125,19 +125,19 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
                   className="object-cover"
                 />
               </div>
-            <div className="p-4">
-                <h3 className="font-semibold text-lg mb-2 hover:text-primary-600 transition-colors">
+            <div className="p-3 sm:p-4 flex flex-col flex-grow">
+                <h3 className="font-semibold text-base sm:text-lg mb-2 hover:text-primary-600 transition-colors line-clamp-2">
                   {product.name}
                 </h3>
-              <p className="text-gray-600 text-sm mb-3 line-clamp-2">
+              <p className="text-gray-600 text-xs sm:text-sm mb-3 line-clamp-2 flex-grow">
                 {product.description}
               </p>
               
               <div className="flex items-center justify-between mb-3">
-                <span className="text-2xl font-bold text-green-600">
+                <span className="text-lg sm:text-xl md:text-2xl font-bold text-green-600">
                   Rp {product.price.toLocaleString('id-ID')}
                 </span>
-                <span className="text-sm text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                <span className="text-xs sm:text-sm text-green-600 bg-green-100 px-2 py-1 rounded-full whitespace-nowrap">
                   📦 {product.stock}
                 </span>
               </div>
@@ -145,14 +145,14 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
               <button
                 onClick={() => addToCart(product._id)}
                 disabled={product.stock === 0}
-                className={`w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg transition-colors ${
+                className={`w-full flex items-center justify-center gap-2 py-2 px-3 sm:px-4 rounded-lg transition-colors text-sm sm:text-base ${
                   product.stock === 0
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     : 'bg-green-600 text-white hover:bg-green-700 shadow-lg'
                 }`}
               >
-                <ShoppingCart size={18} />
-                {product.stock === 0 ? '❌ Habis' : '🛒 Tambah ke Keranjang'}
+                <ShoppingCart size={16} className="sm:w-[18px] sm:h-[18px] flex-shrink-0" />
+                <span className="truncate">{product.stock === 0 ? '❌ Habis' : '🛒 Tambah'}</span>
               </button>
             </div>
           </div>
@@ -161,23 +161,23 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex justify-center items-center gap-2">
+        <div className="flex justify-center items-center gap-2 flex-wrap">
           <button
             onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
             disabled={currentPage === 1}
-            className="px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            className="px-3 sm:px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 text-sm sm:text-base"
           >
             Previous
           </button>
           
-          <span className="px-4 py-2">
+          <span className="px-3 sm:px-4 py-2 text-sm sm:text-base">
             Page {currentPage} of {totalPages}
           </span>
           
           <button
             onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
             disabled={currentPage === totalPages}
-            className="px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            className="px-3 sm:px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 text-sm sm:text-base"
           >
             Next
           </button>

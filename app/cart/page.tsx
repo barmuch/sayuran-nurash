@@ -354,9 +354,7 @@ export default function CartPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="mb-6 sm:mb-8">
             <h1 className="text-2xl sm:text-3xl font-bold text-green-800">🛒 Keranjang Belanja</h1>
-            <p className="text-sm sm:text-base text-green-600">
-              {totalItems > 0 ? `${totalItems} item dalam keranjang` : 'Keranjang Anda kosong'}
-            </p>
+            
           </div>
 
           {!cart?.items || cart.items.length === 0 ? (
