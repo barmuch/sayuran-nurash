@@ -3,6 +3,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface ICartItem {
   productId: mongoose.Types.ObjectId;
   quantity: number;
+  deliveryType?: 'diambil' | 'disedekahkan';
 }
 
 export interface ICart extends Document {
@@ -23,6 +24,11 @@ const CartItemSchema = new Schema<ICartItem>({
     required: true,
     min: 1,
   },
+  deliveryType: {
+    type: String,
+    enum: ['diambil', 'disedekahkan'],
+    default: 'diambil'
+  }
 });
 
 const CartSchema = new Schema<ICart>({

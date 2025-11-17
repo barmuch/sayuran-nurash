@@ -41,72 +41,58 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { productId, quantity } = await request.json();
-
+    const { productId, quantity, deliveryType } = await request.json();
     if (!productId || !quantity) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
     await connectToDB();
-
-    // Check if product exists and has sufficient stock
     const product = await Product.findById(productId);
     if (!product) {
-      return NextResponse.json(
-        { error: 'Product not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Product not found' }, { status: 404 });
     }
-
     if (product.stock < quantity) {
-      return NextResponse.json(
-        { error: 'Insufficient stock' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Insufficient stock' }, { status: 400 });
     }
 
-    // Find or create cart
     let cart = await Cart.findOne({ userId: session.user.id });
+    if (!cart) cart = new Cart({ userId: session.user.id, items: [] });
 
-    if (!cart) {
-      cart = new Cart({ userId: session.user.id, items: [] });
-    }
-
-    // Check if item already exists in cart
-    const existingItemIndex = cart.items.findIndex(
-      (item: any) => item.productId.toString() === productId
-    );
-
+    const existingItemIndex = cart.items.findIndex((item: any) => item.productId.toString() === productId);
     if (existingItemIndex > -1) {
-      // Update quantity
       cart.items[existingItemIndex].quantity += quantity;
+      if (deliveryType && ['diambil','disedekahkan'].includes(deliveryType)) {
+        cart.items[existingItemIndex].deliveryType = deliveryType;
+      }
     } else {
-      // Add new item
-      cart.items.push({ productId, quantity });
+      cart.items.push({ productId, quantity, deliveryType: ['diambil','disedekahkan'].includes(deliveryType) ? deliveryType : 'diambil' });
     }
 
     await cart.save();
-
-    const populatedCart = await Cart.findById(cart._id)
-      .populate('items.productId');
-
+    const populatedCart = await Cart.findById(cart._id).populate('items.productId');
     return NextResponse.json(populatedCart);
   } catch (error) {
     console.error('Add to cart error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+// Clear entire cart (used after successful order for authenticated user)
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    await connectToDB();
+    await Cart.findOneAndUpdate({ userId: session.user.id }, { $set: { items: [] } });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Clear cart error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

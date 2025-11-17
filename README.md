@@ -100,7 +100,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to view the application.
 
-## Default Admin Credentials
+## Default Admin  als
 
 After seeding the database, you can log in as admin:
 

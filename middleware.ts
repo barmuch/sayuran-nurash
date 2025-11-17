@@ -12,10 +12,8 @@ export default withAuth(
           return token?.role === 'admin';
         }
         
-        // Protect user-specific routes
-        if (req.nextUrl.pathname.startsWith('/cart') || 
-            req.nextUrl.pathname.startsWith('/checkout') ||
-            req.nextUrl.pathname.startsWith('/orders')) {
+        // Protect orders (history) for authenticated users only
+        if (req.nextUrl.pathname.startsWith('/orders')) {
           return !!token;
         }
 
@@ -28,8 +26,6 @@ export default withAuth(
 export const config = {
   matcher: [
     '/admin/:path*',
-    '/cart/:path*',
-    '/checkout/:path*',
     '/orders/:path*'
   ]
 };

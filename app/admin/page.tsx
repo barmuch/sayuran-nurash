@@ -4,7 +4,10 @@ import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Plus, Edit, Trash2, Eye, Search, Filter, Package, HelpCircle } from 'lucide-react';
+import { showToast } from '@/lib/toast';
 import ImageHelpModal from '@/components/ImageHelpModal';
+import * as XLSX from 'xlsx';
+import Loading from '@/components/Loading';
 
 interface Product {
   _id: string;
@@ -32,11 +35,14 @@ interface Order {
     };
     quantity: number;
     price: number;
+    deliveryType?: 'diambil' | 'disedekahkan';
   }>;
   totalPrice: number;
   status: 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
   paymentStatus: 'unpaid' | 'pending' | 'paid' | 'refunded';
   paymentMethod?: 'bank_transfer' | 'e_wallet' | 'cod' | 'credit_card';
+  paymentProofUrl?: string;
+  paymentProofUploadedAt?: string;
   shippingAddress?: {
     street: string;
     city: string;
@@ -47,6 +53,16 @@ interface Order {
   notes?: string;
   createdAt: string;
   updatedAt?: string;
+}
+
+interface ItemSummary {
+  productId: string;
+  productName: string;
+  totalQuantity: number;
+  quantityDiambil: number;
+  quantityDisedekahkan: number;
+  totalRevenue: number;
+  orderCount: number;
 }
 
 // Utility functions for status colors
@@ -62,20 +78,26 @@ const getStatusColor = (status: Order['status']) => {
   }
 };
 
-const getPaymentStatusColor = (status: Order['paymentStatus']) => {
+const getPaymentStatusColor = (status: 'pending' | 'paid' | 'cancelled' | 'refunded') => {
   switch (status) {
-    case 'unpaid': return 'bg-red-100 text-red-800';
     case 'pending': return 'bg-yellow-100 text-yellow-800';
     case 'paid': return 'bg-green-100 text-green-800';
+    case 'cancelled': return 'bg-red-100 text-red-800';
     case 'refunded': return 'bg-gray-100 text-gray-800';
     default: return 'bg-gray-100 text-gray-800';
   }
 };
 
+const getCombinedPaymentStatus = (order: Order): 'pending' | 'paid' | 'cancelled' => {
+  if (order.status === 'cancelled') return 'cancelled'
+  if (order.paymentStatus === 'paid') return 'paid'
+  return 'pending'
+}
+
 export default function AdminDashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'products' | 'orders'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'summary'>('products');
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,8 +110,16 @@ export default function AdminDashboard() {
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<string>('all');
+  const [orderDateFrom, setOrderDateFrom] = useState('');
+  const [orderDateTo, setOrderDateTo] = useState('');
+  // Removed item type filter per request
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showOrderDetail, setShowOrderDetail] = useState(false);
+
+  // Pagination states
+  const [productsPage, setProductsPage] = useState(1);
+  const [ordersPage, setOrdersPage] = useState(1);
+  const itemsPerPage = 20;
 
   // Redirect if not admin
   useEffect(() => {
@@ -383,7 +413,7 @@ export default function AdminDashboard() {
   };
 
   const deleteProduct = async (productId: string) => {
-    if (!confirm('Are you sure you want to delete this product? This action cannot be undone.')) return;
+    if (!confirm('Hapus produk ini? Tindakan ini tidak dapat dibatalkan.')) return;
 
     try {
       const response = await fetch(`/api/products/${productId}`, {
@@ -391,15 +421,15 @@ export default function AdminDashboard() {
       });
 
       if (response.ok) {
-        alert('Product deleted successfully!');
+        showToast('Produk berhasil dihapus.', 'success');
         fetchProducts();
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to delete product');
+        showToast(error.error || 'Gagal menghapus produk.', 'error');
       }
     } catch (error) {
       console.error('Error deleting product:', error);
-      alert('Failed to delete product');
+      showToast('Gagal menghapus produk.', 'error');
     }
   };
 
@@ -425,6 +455,15 @@ export default function AdminDashboard() {
     });
   };
 
+  const getPaginatedProducts = () => {
+    const filtered = getFilteredProducts();
+    const start = (productsPage - 1) * itemsPerPage;
+    const end = start + itemsPerPage;
+    return filtered.slice(start, end);
+  };
+
+  const productsTotalPages = Math.ceil(getFilteredProducts().length / itemsPerPage);
+
   const getFilteredOrders = () => {
     return orders.filter(order => {
       const matchesSearch = !orderSearchQuery || 
@@ -433,18 +472,69 @@ export default function AdminDashboard() {
         order.userId?.email?.toLowerCase().includes(orderSearchQuery.toLowerCase());
       
       const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
-      const matchesPaymentStatus = paymentStatusFilter === 'all' || order.paymentStatus === paymentStatusFilter;
+      const combined = getCombinedPaymentStatus(order);
+      const matchesPaymentStatus = paymentStatusFilter === 'all' || combined === paymentStatusFilter;
       
-      return matchesSearch && matchesStatus && matchesPaymentStatus;
+      // Date filtering
+      let matchesDate = true;
+      if (orderDateFrom || orderDateTo) {
+        const dateStr = order.createdAt || order.updatedAt;
+        if (dateStr) {
+          const orderDate = new Date(dateStr);
+          if (orderDateFrom) {
+            const fromDate = new Date(orderDateFrom);
+            fromDate.setHours(0, 0, 0, 0);
+            matchesDate = matchesDate && orderDate >= fromDate;
+          }
+          if (orderDateTo) {
+            const toDate = new Date(orderDateTo);
+            toDate.setHours(23, 59, 59, 999);
+            matchesDate = matchesDate && orderDate <= toDate;
+          }
+        } else {
+          matchesDate = false;
+        }
+      }
+      
+      return matchesSearch && matchesStatus && matchesPaymentStatus && matchesDate;
     });
   };
 
+  const getPaginatedOrders = () => {
+    const filtered = getFilteredOrders();
+    const start = (ordersPage - 1) * itemsPerPage;
+    const end = start + itemsPerPage;
+    return filtered.slice(start, end);
+  };
+
+  const ordersTotalPages = Math.ceil(getFilteredOrders().length / itemsPerPage);
+
+  const downloadOrdersExcel = () => {
+    const filteredOrders = getFilteredOrders();
+    const rows = filteredOrders.map(order => ({
+      'Order ID': order._id,
+      'Customer': order.userId?.username || 'N/A',
+      'Email': order.userId?.email || 'N/A',
+      'Phone': order.userId?.phone || 'N/A',
+      'Items': order.items.map(item => 
+        `${item.productId?.name || 'Unknown'} (${item.quantity}kg - ${item.deliveryType || 'N/A'})`
+      ).join(', '),
+      'Total Price (Rp)': order.totalPrice,
+      'Status': order.status,
+      'Payment Status': getCombinedPaymentStatus(order),
+      'Payment Method': order.paymentMethod || 'N/A',
+      'Created At': order.createdAt ? new Date(order.createdAt).toLocaleString('id-ID') : 'N/A',
+      'Updated At': order.updatedAt ? new Date(order.updatedAt).toLocaleString('id-ID') : 'N/A'
+    }));
+    
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Orders');
+    XLSX.writeFile(wb, `orders-${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
   if (status === 'loading' || loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600"></div>
-      </div>
-    );
+    return <Loading />;
   }
 
   if (!session || session.user.role !== 'admin') {
@@ -482,6 +572,16 @@ export default function AdminDashboard() {
                 }`}
               >
                 Orders ({orders.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('summary')}
+                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'summary'
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                📊 Summary
               </button>
             </nav>
           </div>
@@ -543,7 +643,7 @@ export default function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {getFilteredProducts().map((product) => (
+                      {getPaginatedProducts().map((product) => (
                         <tr key={product._id}>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center">
@@ -608,6 +708,31 @@ export default function AdminDashboard() {
                   </table>
                 </div>
 
+                {/* Products Pagination */}
+                {productsTotalPages > 1 && (
+                  <div className="flex items-center justify-between px-6 py-4 border-t">
+                    <div className="text-sm text-gray-600">
+                      Halaman {productsPage} dari {productsTotalPages} ({getFilteredProducts().length} produk)
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setProductsPage(p => Math.max(1, p - 1))}
+                        disabled={productsPage === 1}
+                        className="px-3 py-1 border rounded disabled:opacity-50 hover:bg-gray-50"
+                      >
+                        ← Prev
+                      </button>
+                      <button
+                        onClick={() => setProductsPage(p => Math.min(productsTotalPages, p + 1))}
+                        disabled={productsPage === productsTotalPages}
+                        className="px-3 py-1 border rounded disabled:opacity-50 hover:bg-gray-50"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {getFilteredProducts().length === 0 && (
                   <div className="text-center py-12">
                     <div className="text-gray-500">
@@ -632,10 +757,15 @@ export default function AdminDashboard() {
             {activeTab === 'orders' && (
               <div>
                 <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
-                  <h2 className="text-xl font-semibold">📦 Order Management</h2>
-                  <div className="text-sm text-gray-600">
-                    Total Orders: {orders.length} | Filtered: {getFilteredOrders().length}
+                  <div>
+                    <h2 className="text-xl font-semibold">📦 Order Management</h2>
+                    <div className="text-sm text-gray-600">
+                      Total Orders: {orders.length} | Filtered: {getFilteredOrders().length}
+                    </div>
                   </div>
+                  <button onClick={downloadOrdersExcel} className="btn-primary text-sm">
+                    📥 Download Excel
+                  </button>
                 </div>
 
                 {/* Order Filters */}
@@ -666,8 +796,6 @@ export default function AdminDashboard() {
                         <option value="all">All Status</option>
                         <option value="pending">Pending</option>
                         <option value="confirmed">Confirmed</option>
-                        <option value="processing">Processing</option>
-                        <option value="shipped">Shipped</option>
                         <option value="delivered">Delivered</option>
                         <option value="cancelled">Cancelled</option>
                       </select>
@@ -682,13 +810,38 @@ export default function AdminDashboard() {
                         onChange={(e) => setPaymentStatusFilter(e.target.value)}
                         className="input-field"
                       >
-                        <option value="all">All Payment Status</option>
-                        <option value="unpaid">Unpaid</option>
-                        <option value="pending">Payment Pending</option>
+                        <option value="all">All</option>
+                        <option value="pending">Pending</option>
                         <option value="paid">Paid</option>
-                        <option value="refunded">Refunded</option>
+                        <option value="cancelled">Cancelled</option>
                       </select>
                     </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        📅 Dari Tanggal
+                      </label>
+                      <input
+                        type="date"
+                        value={orderDateFrom}
+                        onChange={(e) => setOrderDateFrom(e.target.value)}
+                        className="input-field"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        📅 Sampai Tanggal
+                      </label>
+                      <input
+                        type="date"
+                        value={orderDateTo}
+                        onChange={(e) => setOrderDateTo(e.target.value)}
+                        className="input-field"
+                      />
+                    </div>
+
+                    {/* Tipe Item filter removed as requested */}
 
                     <div className="flex items-end">
                       <button
@@ -696,6 +849,8 @@ export default function AdminDashboard() {
                           setOrderSearchQuery('');
                           setStatusFilter('all');
                           setPaymentStatusFilter('all');
+                          setOrderDateFrom('');
+                          setOrderDateTo('');
                         }}
                         className="btn-secondary w-full"
                       >
@@ -718,10 +873,7 @@ export default function AdminDashboard() {
                             Items & Total
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Status
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Payment
+                            Payment Status
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Date
@@ -732,7 +884,7 @@ export default function AdminDashboard() {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {getFilteredOrders().map((order) => (
+                        {getPaginatedOrders().map((order) => (
                           <tr key={order._id} className="hover:bg-gray-50">
                             <td className="px-6 py-4">
                               <div>
@@ -745,9 +897,9 @@ export default function AdminDashboard() {
                                 <div className="text-sm text-gray-500">
                                   📧 {order.userId?.email || 'No email'}
                                 </div>
-                                {order.userId?.phone && (
+                                {(order.userId?.phone || order.shippingAddress?.phone) && (
                                   <div className="text-sm text-gray-500">
-                                    📱 {order.userId.phone}
+                                    📱 {order.userId?.phone || order.shippingAddress?.phone}
                                   </div>
                                 )}
                               </div>
@@ -777,16 +929,15 @@ export default function AdminDashboard() {
                             </td>
 
                             <td className="px-6 py-4">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(order.status)}`}>
-                                {order.status}
-                              </span>
-                            </td>
-
-                            <td className="px-6 py-4">
                               <div>
-                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getPaymentStatusColor(order.paymentStatus || 'unpaid')}`}>
-                                  {order.paymentStatus || 'unpaid'}
-                                </span>
+                                {(() => {
+                                  const s = getCombinedPaymentStatus(order)
+                                  return (
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getPaymentStatusColor(s)}`}>
+                                      {s}
+                                    </span>
+                                  )
+                                })()}
                                 {order.paymentMethod && (
                                   <div className="text-xs text-gray-500 mt-1">
                                     via {order.paymentMethod.replace('_', ' ')}
@@ -822,16 +973,26 @@ export default function AdminDashboard() {
                                 
                                 <select
                                   value={order.status}
-                                  onChange={(e) => {
-                                    // TODO: Implement status update API
-                                    console.log('Update status to:', e.target.value);
+                                  onChange={async (e) => {
+                                    const newStatus = e.target.value
+                                    try {
+                                      const res = await fetch(`/api/orders/${order._id}/status`, { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ status: newStatus }) })
+                                      if (res.ok) {
+                                        const updated = await res.json()
+                                        setOrders(orders.map(o => o._id === order._id ? { ...o, status: updated.status } : o))
+                                        showToast('Status pesanan diperbarui.', 'success')
+                                      } else {
+                                        const err = await res.json().catch(()=>({}))
+                                        showToast(err.message || 'Gagal memperbarui status.', 'error')
+                                      }
+                                    } catch (err) {
+                                      showToast('Terjadi kesalahan saat memperbarui status.', 'error')
+                                    }
                                   }}
                                   className="text-xs border border-gray-300 rounded px-2 py-1"
                                 >
                                   <option value="pending">Pending</option>
                                   <option value="confirmed">Confirmed</option>
-                                  <option value="processing">Processing</option>
-                                  <option value="shipped">Shipped</option>
                                   <option value="delivered">Delivered</option>
                                   <option value="cancelled">Cancelled</option>
                                 </select>
@@ -842,6 +1003,31 @@ export default function AdminDashboard() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Orders Pagination */}
+                  {ordersTotalPages > 1 && (
+                    <div className="flex items-center justify-between px-6 py-4 border-t">
+                      <div className="text-sm text-gray-600">
+                        Halaman {ordersPage} dari {ordersTotalPages} ({getFilteredOrders().length} pesanan)
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setOrdersPage(p => Math.max(1, p - 1))}
+                          disabled={ordersPage === 1}
+                          className="px-3 py-1 border rounded disabled:opacity-50 hover:bg-gray-50"
+                        >
+                          ← Prev
+                        </button>
+                        <button
+                          onClick={() => setOrdersPage(p => Math.min(ordersTotalPages, p + 1))}
+                          disabled={ordersPage === ordersTotalPages}
+                          className="px-3 py-1 border rounded disabled:opacity-50 hover:bg-gray-50"
+                        >
+                          Next →
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {getFilteredOrders().length === 0 && (
                     <div className="text-center py-12">
@@ -866,34 +1052,38 @@ export default function AdminDashboard() {
                 {/* Order Statistics */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                    <div className="text-yellow-800 text-sm font-medium">Pending Orders</div>
+                    <div className="text-yellow-800 text-sm font-medium">Pending</div>
                     <div className="text-2xl font-bold text-yellow-900">
                       {orders.filter(o => o.status === 'pending').length}
                     </div>
                   </div>
                   
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <div className="text-blue-800 text-sm font-medium">Processing</div>
+                    <div className="text-blue-800 text-sm font-medium">Confirmed</div>
                     <div className="text-2xl font-bold text-blue-900">
-                      {orders.filter(o => ['confirmed', 'processing'].includes(o.status)).length}
+                      {orders.filter(o => o.status === 'confirmed').length}
                     </div>
                   </div>
 
                   <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <div className="text-green-800 text-sm font-medium">Completed</div>
+                    <div className="text-green-800 text-sm font-medium">Delivered</div>
                     <div className="text-2xl font-bold text-green-900">
                       {orders.filter(o => o.status === 'delivered').length}
                     </div>
                   </div>
 
                   <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                    <div className="text-red-800 text-sm font-medium">Unpaid Orders</div>
+                    <div className="text-red-800 text-sm font-medium">Cancelled</div>
                     <div className="text-2xl font-bold text-red-900">
-                      {orders.filter(o => (o.paymentStatus || 'unpaid') === 'unpaid').length}
+                      {orders.filter(o => o.status === 'cancelled').length}
                     </div>
                   </div>
                 </div>
               </div>
+            )}
+
+            {activeTab === 'summary' && (
+              <SummaryTab orders={orders} />
             )}
           </div>
         </div>
@@ -924,23 +1114,60 @@ export default function AdminDashboard() {
             setShowOrderDetail(false);
             setSelectedOrder(null);
           }}
-          onStatusUpdate={(orderId, newStatus) => {
-            // TODO: Implement API call
-            console.log('Update order status:', orderId, newStatus);
-            setOrders(orders.map(order => 
-              order._id === orderId 
-                ? { ...order, status: newStatus as Order['status'] }
-                : order
-            ));
+          onStatusUpdate={async (orderId, newStatus) => {
+            try {
+              const res = await fetch(`/api/orders/${orderId}/status`, { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ status: newStatus }) })
+              if (res.ok) {
+                const updated = await res.json()
+                setOrders(orders.map(order => 
+                  order._id === orderId 
+                    ? { 
+                        ...order, 
+                        status: updated.status as Order['status'],
+                        paymentMethod: updated.paymentMethod as Order['paymentMethod'],
+                        paymentStatus: updated.paymentStatus as Order['paymentStatus']
+                      }
+                    : order
+                ));
+                // Update selectedOrder juga untuk refresh modal
+                setSelectedOrder(prev => prev ? {
+                  ...prev,
+                  status: updated.status as Order['status'],
+                  paymentMethod: updated.paymentMethod as Order['paymentMethod'],
+                  paymentStatus: updated.paymentStatus as Order['paymentStatus']
+                } : null);
+                showToast('Status pesanan diperbarui.', 'success')
+              } else {
+                const err = await res.json().catch(()=>({}))
+                showToast(err.message || 'Gagal memperbarui status.', 'error')
+              }
+            } catch (e) {
+              showToast('Terjadi kesalahan saat memperbarui status.', 'error')
+            }
           }}
-          onPaymentStatusUpdate={(orderId, newPaymentStatus) => {
-            // TODO: Implement API call
-            console.log('Update payment status:', orderId, newPaymentStatus);
-            setOrders(orders.map(order => 
-              order._id === orderId 
-                ? { ...order, paymentStatus: newPaymentStatus as Order['paymentStatus'] }
-                : order
-            ));
+          onPaymentStatusUpdate={async (orderId, newPaymentStatus) => {
+            try {
+              const res = await fetch(`/api/orders/${orderId}/payment-status`, { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ paymentStatus: newPaymentStatus }) })
+              if (res.ok) {
+                const updated = await res.json()
+                setOrders(orders.map(order => 
+                  order._id === orderId 
+                    ? { ...order, paymentStatus: updated.paymentStatus as Order['paymentStatus'] }
+                    : order
+                ));
+                // Update selectedOrder juga untuk refresh modal
+                setSelectedOrder(prev => prev ? {
+                  ...prev,
+                  paymentStatus: updated.paymentStatus as Order['paymentStatus']
+                } : null);
+                showToast('Status pembayaran diperbarui.', 'success')
+              } else {
+                const err = await res.json().catch(()=>({}))
+                showToast(err.message || 'Gagal memperbarui status pembayaran.', 'error')
+              }
+            } catch (e) {
+              showToast('Terjadi kesalahan saat memperbarui status pembayaran.', 'error')
+            }
           }}
         />
       )}
@@ -991,14 +1218,15 @@ function ProductFormModal({ product, onClose, onSuccess, onShowImageHelp }: Prod
       });
 
       if (response.ok) {
+        showToast('Produk berhasil disimpan.', 'success');
         onSuccess();
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to save product');
+        showToast(error.error || 'Gagal menyimpan produk.', 'error');
       }
     } catch (error) {
       console.error('Error saving product:', error);
-      alert('Failed to save product');
+      showToast('Gagal menyimpan produk.', 'error');
     } finally {
       setLoading(false);
     }
@@ -1154,11 +1382,23 @@ function ProductFormModal({ product, onClose, onSuccess, onShowImageHelp }: Prod
 interface OrderDetailModalProps {
   order: Order;
   onClose: () => void;
-  onStatusUpdate: (orderId: string, newStatus: string) => void;
-  onPaymentStatusUpdate: (orderId: string, newPaymentStatus: string) => void;
+  onStatusUpdate: (orderId: string, newStatus: string) => Promise<void>;
+  onPaymentStatusUpdate: (orderId: string, newPaymentStatus: string) => Promise<void>;
 }
 
 function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdate }: OrderDetailModalProps) {
+  const [localOrder, setLocalOrder] = useState(order);
+
+  const handleStatusUpdate = async (newStatus: string) => {
+    await onStatusUpdate(localOrder._id, newStatus);
+    setLocalOrder(prev => ({ ...prev, status: newStatus as Order['status'] }));
+  };
+
+  const handlePaymentStatusUpdate = async (newPaymentStatus: string) => {
+    await onPaymentStatusUpdate(localOrder._id, newPaymentStatus);
+    setLocalOrder(prev => ({ ...prev, paymentStatus: newPaymentStatus as Order['paymentStatus'] }));
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -1166,10 +1406,10 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
         <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-green-50">
           <div>
             <h3 className="text-xl font-semibold text-green-800">
-              📦 Order Details #{order._id.slice(-8)}
+              📦 Order Details #{localOrder._id.slice(-8)}
             </h3>
             <p className="text-green-600 text-sm">
-              Placed on {new Date(order.createdAt).toLocaleDateString('id-ID')} at {new Date(order.createdAt).toLocaleTimeString('id-ID')}
+              Placed on {new Date(localOrder.createdAt).toLocaleDateString('id-ID')} at {new Date(localOrder.createdAt).toLocaleTimeString('id-ID')}
             </p>
           </div>
           <button
@@ -1188,29 +1428,29 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
               <div className="space-y-3">
                 <div>
                   <span className="text-sm font-medium text-gray-700">Name:</span>
-                  <p className="text-gray-900">{order.userId?.username || 'Guest Customer'}</p>
+                  <p className="text-gray-900">{localOrder.userId?.username || 'Guest Customer'}</p>
                 </div>
                 <div>
                   <span className="text-sm font-medium text-gray-700">Email:</span>
-                  <p className="text-gray-900">{order.userId?.email || 'No email provided'}</p>
+                  <p className="text-gray-900">{localOrder.userId?.email || 'No email provided'}</p>
                 </div>
-                {order.userId?.phone && (
+                {(localOrder.userId?.phone || localOrder.shippingAddress?.phone) && (
                   <div>
                     <span className="text-sm font-medium text-gray-700">Phone:</span>
-                    <p className="text-gray-900">{order.userId.phone}</p>
+                    <p className="text-gray-900">{localOrder.userId?.phone || localOrder.shippingAddress?.phone}</p>
                   </div>
                 )}
-                {order.shippingAddress && (
+                {localOrder.shippingAddress && (
                   <div>
                     <span className="text-sm font-medium text-gray-700">Shipping Address:</span>
                     <p className="text-gray-900">
-                      {order.shippingAddress.street}<br />
-                      {order.shippingAddress.city}, {order.shippingAddress.province}<br />
-                      {order.shippingAddress.postalCode}
+                      {localOrder.shippingAddress.street}<br />
+                      {localOrder.shippingAddress.city}, {localOrder.shippingAddress.province}<br />
+                      {localOrder.shippingAddress.postalCode}
                     </p>
-                    {order.shippingAddress.phone && (
+                    {localOrder.shippingAddress.phone && (
                       <p className="text-gray-700 text-sm mt-1">
-                        Phone: {order.shippingAddress.phone}
+                        Phone: {localOrder.shippingAddress.phone}
                       </p>
                     )}
                   </div>
@@ -1225,14 +1465,12 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Order Status:</label>
                   <select
-                    value={order.status}
-                    onChange={(e) => onStatusUpdate(order._id, e.target.value)}
-                    className={`w-full p-2 border border-gray-300 rounded-lg text-sm font-medium ${getStatusColor(order.status)}`}
+                    value={localOrder.status}
+                    onChange={(e) => handleStatusUpdate(e.target.value)}
+                    className={`w-full p-2 border border-gray-300 rounded-lg text-sm font-medium ${getStatusColor(localOrder.status)}`}
                   >
                     <option value="pending">Pending</option>
                     <option value="confirmed">Confirmed</option>
-                    <option value="processing">Processing</option>
-                    <option value="shipped">Shipped</option>
                     <option value="delivered">Delivered</option>
                     <option value="cancelled">Cancelled</option>
                   </select>
@@ -1240,31 +1478,48 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Payment Status:</label>
-                  <select
-                    value={order.paymentStatus || 'unpaid'}
-                    onChange={(e) => onPaymentStatusUpdate(order._id, e.target.value)}
-                    className={`w-full p-2 border border-gray-300 rounded-lg text-sm font-medium ${getPaymentStatusColor(order.paymentStatus || 'unpaid')}`}
-                  >
-                    <option value="unpaid">Unpaid</option>
-                    <option value="pending">Payment Pending</option>
-                    <option value="paid">Paid</option>
-                    <option value="refunded">Refunded</option>
-                  </select>
+                  {(() => { 
+                    const s = getCombinedPaymentStatus(localOrder);
+                    const effective = s === 'cancelled' ? 'cancelled' : (localOrder.paymentStatus || 'pending');
+                    const disabled = s === 'cancelled';
+                    return (
+                      <select
+                        value={effective}
+                        disabled={disabled}
+                        onChange={(e) => handlePaymentStatusUpdate(e.target.value)}
+                        className={`w-full p-2 border border-gray-300 rounded-lg text-sm font-medium ${getPaymentStatusColor(s === 'cancelled' ? 'cancelled' : (effective as any))}`}
+                      >
+                        <option value="pending">Pending</option>
+                        <option value="paid">Paid</option>
+                        <option value="refunded">Refunded</option>
+                      </select>
+                    ) 
+                  })()}
                 </div>
 
-                {order.paymentMethod && (
+                {localOrder.paymentMethod && (
                   <div>
                     <span className="text-sm font-medium text-gray-700">Payment Method:</span>
                     <p className="text-gray-900 capitalize">
-                      {order.paymentMethod.replace('_', ' ')}
+                      {localOrder.paymentMethod.replace('_', ' ')}
                     </p>
+                  </div>
+                )}
+
+                {localOrder.paymentProofUrl && (
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Payment Proof:</span>
+                    <a href={localOrder.paymentProofUrl} target="_blank" className="block mt-1 text-blue-600 underline text-sm">Buka bukti bayar</a>
+                    <div className="mt-2 border rounded-lg overflow-hidden bg-white">
+                      <img src={localOrder.paymentProofUrl} alt="Bukti Pembayaran" className="max-h-64 w-auto object-contain mx-auto" />
+                    </div>
                   </div>
                 )}
 
                 <div className="bg-green-100 rounded-lg p-3 border border-green-200">
                   <span className="text-sm font-medium text-green-800">Total Amount:</span>
                   <p className="text-2xl font-bold text-green-900">
-                    Rp {order.totalPrice.toLocaleString('id-ID')}
+                    Rp {localOrder.totalPrice.toLocaleString('id-ID')}
                   </p>
                 </div>
               </div>
@@ -1280,12 +1535,13 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipe</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quantity</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {order.items.map((item, index) => (
+                  {localOrder.items.map((item, index) => (
                     <tr key={index}>
                       <td className="px-4 py-4">
                         <div className="flex items-center">
@@ -1308,6 +1564,11 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
                       </td>
                       <td className="px-4 py-4 text-sm text-gray-900">
                         Rp {item.price.toLocaleString('id-ID')}
+                      </td>
+                      <td className="px-4 py-4 text-sm text-gray-900">
+                        {item.deliveryType ? (
+                          <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${item.deliveryType==='disedekahkan' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>{item.deliveryType==='disedekahkan' ? 'Disedekahkan' : 'Diambil'}</span>
+                        ) : <span className="text-gray-400 text-xs">-</span>}
                       </td>
                       <td className="px-4 py-4 text-sm text-gray-900">
                         {item.quantity}
@@ -1343,24 +1604,304 @@ function OrderDetailModal({ order, onClose, onStatusUpdate, onPaymentStatusUpdat
           )}
 
           {/* Action Buttons */}
-          <div className="mt-6 flex flex-col sm:flex-row gap-3">
-            <button className="btn-primary flex-1">
-              📄 Generate Invoice
-            </button>
-            <button className="btn-secondary flex-1">
-              📧 Send Email Update
-            </button>
-            <button className="btn-secondary flex-1">
-              📱 Send WhatsApp Update
-            </button>
-            <button 
-              onClick={onClose}
-              className="btn-secondary"
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Summary Tab Component
+interface SummaryTabProps {
+  orders: Order[];
+}
+
+function SummaryTab({ orders }: SummaryTabProps) {
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'paid' | 'pending'>('all');
+  const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'diambil' | 'disedekahkan'>('all');
+  const [sortBy, setSortBy] = useState<'quantity' | 'revenue'>('quantity');
+  const [summaryPage, setSummaryPage] = useState(1);
+  const itemsPerPage = 20;
+
+  const filterOrdersByDate = (order: Order) => {
+    if (!dateFrom && !dateTo) return true;
+    const orderDate = new Date(order.createdAt);
+    
+    if (dateFrom && !dateTo) {
+      return orderDate >= new Date(dateFrom);
+    }
+    if (!dateFrom && dateTo) {
+      return orderDate <= new Date(dateTo);
+    }
+    return orderDate >= new Date(dateFrom) && orderDate <= new Date(dateTo);
+  };
+
+  const filterOrdersByPayment = (order: Order) => {
+    if (paymentFilter === 'all') return true;
+    const combined = getCombinedPaymentStatus(order);
+    return combined === paymentFilter;
+  };
+
+  const getFilteredOrders = () => {
+    return orders.filter(o => filterOrdersByDate(o) && filterOrdersByPayment(o));
+  };
+
+  const buildSummary = (): ItemSummary[] => {
+    const map = new Map<string, ItemSummary>();
+    const filtered = getFilteredOrders();
+
+    filtered.forEach(order => {
+      order.items.forEach(item => {
+        const key = item.productId._id;
+        const deliveryType = item.deliveryType || 'diambil';
+        
+        // Skip if delivery filter active and doesn't match
+        if (deliveryFilter !== 'all' && deliveryType !== deliveryFilter) return;
+
+        if (!map.has(key)) {
+          map.set(key, {
+            productId: key,
+            productName: item.productId.name,
+            totalQuantity: 0,
+            quantityDiambil: 0,
+            quantityDisedekahkan: 0,
+            totalRevenue: 0,
+            orderCount: 0,
+          });
+        }
+
+        const summary = map.get(key)!;
+        summary.totalQuantity += item.quantity;
+        if (deliveryType === 'diambil') {
+          summary.quantityDiambil += item.quantity;
+        } else {
+          summary.quantityDisedekahkan += item.quantity;
+        }
+        summary.totalRevenue += item.price * item.quantity;
+        summary.orderCount += 1;
+      });
+    });
+
+    const result = Array.from(map.values());
+    
+    // Sort
+    result.sort((a, b) => {
+      if (sortBy === 'quantity') return b.totalQuantity - a.totalQuantity;
+      return b.totalRevenue - a.totalRevenue;
+    });
+
+    return result;
+  };
+
+  const summary = buildSummary();
+  const totalRevenue = summary.reduce((sum, s) => sum + s.totalRevenue, 0);
+  const totalQuantity = summary.reduce((sum, s) => sum + s.totalQuantity, 0);
+
+  const getPaginatedSummary = () => {
+    const start = (summaryPage - 1) * itemsPerPage;
+    const end = start + itemsPerPage;
+    return summary.slice(start, end);
+  };
+
+  const summaryTotalPages = Math.ceil(summary.length / itemsPerPage);
+
+  const downloadExcel = () => {
+    const rows = summary.map(s => ({
+      'Nama Item': s.productName,
+      'Total Qty (kg)': s.totalQuantity,
+      'Diambil (kg)': s.quantityDiambil,
+      'Disedekahkan (kg)': s.quantityDisedekahkan,
+      'Total Revenue (Rp)': s.totalRevenue,
+      'Jumlah Order': s.orderCount
+    }));
+    
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap Item');
+    XLSX.writeFile(wb, `rekap-item-${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  return (
+    <div>
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
+        <div>
+          <h2 className="text-xl font-semibold">📊 Rekap Item</h2>
+          <p className="text-sm text-gray-600">Ringkasan penjualan per item untuk manajemen</p>
+        </div>
+        <button onClick={downloadExcel} className="btn-primary text-sm">
+          📥 Download Excel
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-gray-50 rounded-lg p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">📅 Dari</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">📅 Sampai</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">💳 Status Bayar</label>
+            <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value as any)} className="input-field">
+              <option value="all">Semua</option>
+              <option value="paid">Sudah Bayar</option>
+              <option value="pending">Belum Bayar</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">🚗 Tipe Pengiriman</label>
+            <select value={deliveryFilter} onChange={(e) => setDeliveryFilter(e.target.value as any)} className="input-field">
+              <option value="all">Semua</option>
+              <option value="diambil">Diambil</option>
+              <option value="disedekahkan">Disedekahkan</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">🔽 Urutkan</label>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)} className="input-field">
+              <option value="quantity">Qty Terbanyak</option>
+              <option value="revenue">Revenue Tertinggi</option>
+            </select>
+          </div>
+
+          <div className="flex items-end">
+            <button
+              onClick={() => {
+                setDateFrom('');
+                setDateTo('');
+                setPaymentFilter('all');
+                setDeliveryFilter('all');
+              }}
+              className="btn-secondary w-full"
             >
-              Close
+              Reset Filter
             </button>
           </div>
         </div>
+
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+          <div className="bg-white rounded-lg p-4 border">
+            <div className="text-sm text-gray-600">Total Item Terjual</div>
+            <div className="text-2xl font-bold text-green-600">{totalQuantity} kg</div>
+          </div>
+          <div className="bg-white rounded-lg p-4 border">
+            <div className="text-sm text-gray-600">Total Revenue</div>
+            <div className="text-2xl font-bold text-green-600">Rp {totalRevenue.toLocaleString('id-ID')}</div>
+          </div>
+          <div className="bg-white rounded-lg p-4 border">
+            <div className="text-sm text-gray-600">Jumlah Produk</div>
+            <div className="text-2xl font-bold text-green-600">{summary.length}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Summary Table */}
+      <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Nama Item
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Total Qty (kg)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Diambil (kg)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Disedekahkan (kg)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Total Revenue
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Jumlah Order
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {getPaginatedSummary().map((item) => (
+                <tr key={item.productId} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-gray-900">{item.productName}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-semibold text-gray-900">{item.totalQuantity} kg</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{item.quantityDiambil} kg</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{item.quantityDisedekahkan} kg</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-semibold text-green-600">
+                      Rp {item.totalRevenue.toLocaleString('id-ID')}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{item.orderCount}</div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination Controls */}
+        {summary.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 bg-white border-t">
+            <div className="text-sm text-gray-700">
+              Halaman {summaryPage} dari {summaryTotalPages} ({summary.length} item)
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setSummaryPage(summaryPage - 1)}
+                disabled={summaryPage === 1}
+                className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                ← Prev
+              </button>
+              <button
+                onClick={() => setSummaryPage(summaryPage + 1)}
+                disabled={summaryPage >= summaryTotalPages}
+                className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {summary.length === 0 && (
+          <div className="text-center py-12">
+            <Package size={48} className="mx-auto mb-4 text-gray-300" />
+            <h3 className="text-lg font-medium mb-2 text-gray-600">Belum ada data</h3>
+            <p className="text-sm text-gray-500">Data summary akan muncul setelah ada pesanan.</p>
+          </div>
+        )}
       </div>
     </div>
   );

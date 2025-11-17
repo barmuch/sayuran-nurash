@@ -2,16 +2,101 @@
 
 import Link from 'next/link';
 import { useSession, signOut } from 'next-auth/react';
-import { ShoppingCart, User, LogOut, Settings } from 'lucide-react';
-import { useState } from 'react';
+import { ShoppingCart, User, LogOut, Settings, Receipt } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import Image from 'next/image';
+import logo from '@/global/LOGO_WARUNG-removebg-preview.png';
 
 export default function Navbar() {
   const { data: session, status } = useSession();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [unpaidCount, setUnpaidCount] = useState(0);
+  const [cartCount, setCartCount] = useState(0);
 
   const handleSignOut = () => {
     signOut({ callbackUrl: '/' });
   };
+
+  // Hitung pesanan yang belum diberi aksi (pending dan belum ada bukti/cancel)
+  useEffect(() => { 
+    setUnpaidCount(0);
+    setCartCount(0); 
+  }, []);
+
+  useEffect(() => {
+    const fetchUserUnpaid = async () => {
+      if (!session) return;
+      try {
+        const res = await fetch('/api/orders');
+        if (res.ok) {
+          const data = await res.json();
+          // Hitung order dengan status pending yang belum upload bukti dan belum di-cancel
+          const count = data.filter((o: any) => 
+            o.status === 'pending' && 
+            !o.paymentProofUrl && 
+            o.status !== 'cancelled'
+          ).length;
+          setUnpaidCount(count);
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    };
+    
+    fetchUserUnpaid();
+    
+    // Listen untuk event custom 'ordersUpdated'
+    const handleOrdersUpdate = () => {
+      fetchUserUnpaid();
+    };
+    window.addEventListener('ordersUpdated', handleOrdersUpdate);
+    
+    return () => {
+      window.removeEventListener('ordersUpdated', handleOrdersUpdate);
+    };
+  }, [session]);
+
+  // Hitung item di keranjang
+  useEffect(() => {
+    const fetchCartCount = async () => {
+      if (!session) {
+        // Guest cart dari localStorage
+        const guestCart = localStorage.getItem('guestCart');
+        if (guestCart) {
+          const cart = JSON.parse(guestCart);
+          // Hitung jumlah jenis item (bukan total kg)
+          const count = cart.items?.length || 0;
+          setCartCount(count);
+        }
+        return;
+      }
+
+      // User login: ambil dari API
+      try {
+        const res = await fetch('/api/cart');
+        if (res.ok) {
+          const cart = await res.json();
+          // Hitung jumlah jenis item (bukan total kg)
+          const count = cart.items?.length || 0;
+          setCartCount(count);
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    };
+
+    fetchCartCount();
+    
+    // Listen untuk event custom 'cartUpdated'
+    const handleCartUpdate = () => {
+      fetchCartCount();
+    };
+    window.addEventListener('cartUpdated', handleCartUpdate);
+    
+    return () => {
+      window.removeEventListener('cartUpdated', handleCartUpdate);
+    };
+  }, [session]);
 
   return (
     <nav className="bg-white shadow-md border-b-2 border-green-200">
@@ -19,13 +104,16 @@ export default function Navbar() {
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
           <Link href="/" className="flex items-center space-x-3">
-            <img 
-              src="https://pbs.twimg.com/profile_images/1586970994802970625/6PEwDEg4_400x400.jpg"
-              alt="Logo Sayuran Segar Kita"
-              className="w-10 h-10 rounded-full object-cover border-2 border-green-200"
+            <Image
+              src={logo}
+              alt="Logo Toko Petani Langsung"
+              width={48}
+              height={48}
+              className="rounded-full object-cover border-2 border-green-200"
+              priority
             />
             <div className="text-2xl font-bold text-green-700 flex items-center">
-            Toko Sayur
+              Toko Petani Langsung
             </div>
           </Link>
 
@@ -49,12 +137,31 @@ export default function Navbar() {
 
           {/* Right side buttons */}
           <div className="flex items-center space-x-4">
+            {/* Orders (Pesanan Saya) */}
+            <Link
+              href="/orders"
+              className="p-2 text-green-700 hover:text-green-600 transition-colors relative bg-green-50 rounded-lg"
+              title="Pesanan Saya"
+            >
+              <Receipt size={24} />
+              {unpaidCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[10px] min-w-[18px] h-[18px] flex items-center justify-center rounded-full px-1 font-bold">
+                  {unpaidCount}
+                </span>
+              )}
+            </Link>
             {/* Cart */}
             <Link
               href="/cart"
               className="p-2 text-green-700 hover:text-green-600 transition-colors relative bg-green-50 rounded-lg"
+              title="Keranjang Belanja"
             >
               <ShoppingCart size={24} />
+              {cartCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-green-600 text-white text-[10px] min-w-[18px] h-[18px] flex items-center justify-center rounded-full px-1 font-bold">
+                  {cartCount}
+                </span>
+              )}
             </Link>
 
             {/* User Menu */}
@@ -76,7 +183,7 @@ export default function Navbar() {
                       <div className="px-4 py-2 text-sm text-green-700 border-b border-green-100 bg-green-50">
                         👨‍🌾 {session.user.username}
                       </div>
-                      
+
                       {session.user.role === 'admin' && (
                         <Link
                           href="/admin"
@@ -87,16 +194,9 @@ export default function Navbar() {
                           Admin Dashboard
                         </Link>
                       )}
-                      
-                      <Link
-                        href="/orders"
-                        className="flex items-center px-4 py-2 text-sm text-green-700 hover:bg-green-50"
-                        onClick={() => setIsMenuOpen(false)}
-                      >
-                        <ShoppingCart size={16} className="mr-2" />
-                        Pesanan Saya
-                      </Link>
-                      
+
+                      {/* Pesanan Saya dipindahkan ke topbar */}
+
                       <button
                         onClick={handleSignOut}
                         className="flex items-center w-full px-4 py-2 text-sm text-green-700 hover:bg-green-50"

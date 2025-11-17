@@ -5,31 +5,22 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
-import { Package, Calendar, CreditCard, ShoppingBag } from 'lucide-react';
+import { Package, Calendar, CreditCard, ShoppingBag, Check, Upload, XCircle } from 'lucide-react';
+import { showToast } from '@/lib/toast';
+import Loading from '@/components/Loading';
 
 interface OrderItem {
-  productId: {
-    _id: string;
-    name: string;
-    imageUrl: string;
-  };
-  quantity: number;
-  price: number;
+  productId: { _id: string; name: string; imageUrl: string };
+  quantity: number; price: number; deliveryType?: 'diambil' | 'disedekahkan';
 }
-
-interface Order {
-  _id: string;
-  items: OrderItem[];
-  totalPrice: number;
-  status: 'pending' | 'completed' | 'cancelled';
-  createdAt: string;
-}
+interface Order { _id: string; items: OrderItem[]; totalPrice: number; status: string; createdAt: string; paymentStatus?: string; paymentProofUrl?: string; }
 
 export default function OrdersPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     if (status === 'loading') return;
@@ -58,16 +49,56 @@ export default function OrdersPage() {
     }
   };
 
+  const cancelOrder = async (orderId: string) => {
+    if (!orderId) return;
+    try {
+      const res = await fetch(`/api/orders/${orderId}/cancel`, { method: 'POST' });
+      if (res.ok) {
+        showToast('Pesanan berhasil dibatalkan.', 'success');
+        setConfirmId(null);
+        fetchOrders();
+        // Trigger event untuk update badge orders
+        window.dispatchEvent(new Event('ordersUpdated'));
+      } else {
+        const err = await res.json().catch(()=>({}));
+        showToast(err.message || 'Gagal membatalkan pesanan.', 'error');
+      }
+    } catch (e) {
+      showToast('Terjadi kesalahan saat membatalkan pesanan.', 'error');
+    }
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
         return 'bg-green-100 text-green-800';
       case 'pending':
         return 'bg-yellow-100 text-yellow-800';
+      case 'confirmed':
+        return 'bg-blue-100 text-blue-800';
+      case 'delivered':
+        return 'bg-green-100 text-green-800';
       case 'cancelled':
         return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return 'Menunggu Konfirmasi Admin';
+      case 'confirmed':
+        return 'Dikonfirmasi';
+      case 'delivered':
+        return 'Selesai';
+      case 'cancelled':
+        return 'Dibatalkan';
+      case 'completed':
+        return 'Selesai';
+      default:
+        return status.charAt(0).toUpperCase() + status.slice(1);
     }
   };
 
@@ -82,11 +113,7 @@ export default function OrdersPage() {
   };
 
   if (status === 'loading' || loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600"></div>
-      </div>
-    );
+    return <Loading />;
   }
 
   if (!session) {
@@ -94,23 +121,24 @@ export default function OrdersPage() {
   }
 
   return (
+    <>
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">My Orders</h1>
-          <p className="text-gray-600">Track and manage your orders</p>
+          <h1 className="text-3xl font-bold text-gray-900">Pesanan Saya</h1>
+          <p className="text-gray-600">Riwayat & status pembayaran</p>
         </div>
 
         {orders.length === 0 ? (
           <div className="text-center py-16">
             <ShoppingBag size={64} className="mx-auto text-gray-300 mb-4" />
-            <h2 className="text-2xl font-semibold text-gray-600 mb-4">No orders yet</h2>
-            <p className="text-gray-500 mb-8">Start shopping to see your orders here</p>
+            <h2 className="text-2xl font-semibold text-gray-600 mb-4">Belum ada pesanan</h2>
+            <p className="text-gray-500 mb-8">Mulai belanja untuk membuat pesanan</p>
             <Link
               href="/"
               className="btn-primary"
             >
-              Continue Shopping
+              Belanja Sekarang
             </Link>
           </div>
         ) : (
@@ -123,9 +151,7 @@ export default function OrdersPage() {
                     <div className="flex items-center space-x-4">
                       <Package className="text-primary-600" size={20} />
                       <div>
-                        <h3 className="font-semibold text-gray-900">
-                          Order #{order._id.slice(-8)}
-                        </h3>
+                        <h3 className="font-semibold text-gray-900">Order #{order._id.slice(-8)}</h3>
                         <div className="flex items-center text-sm text-gray-500 mt-1">
                           <Calendar size={16} className="mr-1" />
                           {formatDate(order.createdAt)}
@@ -135,16 +161,17 @@ export default function OrdersPage() {
                     
                     <div className="flex items-center space-x-4 mt-4 sm:mt-0">
                       <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.status)}`}>
-                        {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                        {getStatusLabel(order.status)}
                       </span>
-                      <div className="text-right">
-                        <div className="flex items-center text-sm text-gray-500">
-                          <CreditCard size={16} className="mr-1" />
-                          Total
+                      <div className="text-right text-sm">
+                        <div className="flex items-center justify-end gap-2 mb-1">
+                          <CreditCard size={16} />
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${order.paymentStatus==='paid' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                            {order.paymentStatus==='paid' ? 'Sudah Bayar' : 'Belum Bayar'}
+                          </span>
                         </div>
-                        <div className="font-semibold text-lg text-gray-900">
-                          ${order.totalPrice.toFixed(2)}
-                        </div>
+                        <div className="font-semibold text-base text-gray-900">Rp {order.totalPrice.toLocaleString('id-ID')}</div>
+                        {order.paymentProofUrl && <a href={order.paymentProofUrl} target="_blank" className="text-xs text-blue-600 underline">Lihat Bukti</a>}
                       </div>
                     </div>
                   </div>
@@ -152,7 +179,7 @@ export default function OrdersPage() {
 
                 {/* Order Items */}
                 <div className="p-6">
-                  <h4 className="font-medium text-gray-900 mb-4">Items ({order.items.length})</h4>
+                  <h4 className="font-medium text-gray-900 mb-4">Item ({order.items.length})</h4>
                   <div className="space-y-4">
                     {order.items.map((item, index) => (
                       <div key={index} className="flex items-center space-x-4">
@@ -172,28 +199,40 @@ export default function OrdersPage() {
                           >
                             {item.productId.name}
                           </Link>
-                          <p className="text-gray-600">
-                            Quantity: {item.quantity} × ${item.price.toFixed(2)}
-                          </p>
+                          <p className="text-gray-600 text-sm">{item.quantity} × Rp {item.price.toLocaleString('id-ID')}</p>
+                          {item.deliveryType && (
+                            <span className={`inline-block mt-1 text-xs px-2 py-1 rounded-full ${item.deliveryType==='disedekahkan' ? 'bg-yellow-100 text-yellow-800':'bg-green-100 text-green-800'}`}>
+                              {item.deliveryType==='disedekahkan' ? '🎁 Disedekahkan' : '🚗 Diambil'}
+                            </span>
+                          )}
                         </div>
                         
                         <div className="text-right">
-                          <p className="text-lg font-semibold text-gray-900">
-                            ${(item.price * item.quantity).toFixed(2)}
-                          </p>
+                          <p className="text-lg font-semibold text-gray-900">Rp {(item.price * item.quantity).toLocaleString('id-ID')}</p>
                         </div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Order Summary */}
-                <div className="bg-gray-50 px-6 py-4 border-t">
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium text-gray-900">Order Total</span>
-                    <span className="text-xl font-bold text-primary-600">
-                      ${order.totalPrice.toFixed(2)}
-                    </span>
+                <div className="bg-gray-50 px-6 py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="font-medium text-gray-900">Total: <span className="text-primary-600 font-bold">Rp {order.totalPrice.toLocaleString('id-ID')}</span></div>
+                  <div className="flex items-center gap-2">
+                    {order.status === 'pending' && order.paymentStatus !== 'paid' && (
+                      <button onClick={()=> setConfirmId(order._id)}
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700">
+                        <XCircle size={16} className="mr-2" /> Batalkan
+                      </button>
+                    )}
+                    {order.paymentStatus !== 'paid' && (
+                      <button onClick={()=> window.location.href = `/payment-confirmation?orderId=${order._id}`}
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700">
+                        <Upload size={16} className="mr-2" /> Unggah Bukti
+                      </button>
+                    )}
+                    {order.paymentStatus === 'paid' && (
+                      <div className="flex items-center text-green-700 text-sm"><Check size={16} className="mr-1"/> Pembayaran selesai</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -202,5 +241,20 @@ export default function OrdersPage() {
         )}
       </div>
     </div>
+
+    {/* Confirm Cancel Modal */}
+    {confirmId && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-5">
+          <h3 className="text-lg font-semibold mb-2">Batalkan Pesanan?</h3>
+          <p className="text-sm text-gray-600 mb-4">Tindakan ini tidak dapat dibatalkan. Pesanan akan ditandai sebagai dibatalkan.</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={()=> setConfirmId(null)} className="px-4 py-2 rounded-md border">Tutup</button>
+            <button onClick={()=> cancelOrder(confirmId!)} className="px-4 py-2 rounded-md bg-red-600 text-white hover:bg-red-700">Batalkan</button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   );
 }

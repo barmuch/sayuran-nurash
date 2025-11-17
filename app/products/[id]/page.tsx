@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ShoppingCart, ArrowLeft, Plus, Minus } from 'lucide-react';
+import { showToast } from '@/lib/toast';
+import Loading from '@/components/Loading';
 
 interface Product {
   _id: string;
@@ -28,7 +30,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
   const router = useRouter();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
-  const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState(5);
   const [addingToCart, setAddingToCart] = useState(false);
 
   useEffect(() => {
@@ -75,16 +77,18 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
       });
 
       if (response.ok) {
-        alert('Product added to cart!');
+        showToast('✅ Produk berhasil ditambahkan ke keranjang!', 'success');
+        // Trigger event untuk update badge
+        window.dispatchEvent(new Event('cartUpdated'));
         // Optionally redirect to cart
         // router.push('/cart');
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to add product to cart');
+        showToast(error.error || 'Gagal menambahkan produk ke keranjang.', 'error');
       }
     } catch (error) {
       console.error('Error adding to cart:', error);
-      alert('Failed to add product to cart');
+      showToast('Gagal menambahkan produk ke keranjang.', 'error');
     } finally {
       setAddingToCart(false);
     }
@@ -96,18 +100,10 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
     }
   };
 
-  const decreaseQuantity = () => {
-    if (quantity > 1) {
-      setQuantity(prev => prev - 1);
-    }
-  };
+  const decreaseQuantity = () => { if (quantity > 5) setQuantity(prev => prev - 1); };
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600"></div>
-      </div>
-    );
+    return <Loading />;
   }
 
   if (!product) {

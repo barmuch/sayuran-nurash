@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { ShoppingCart, Plus, Minus } from 'lucide-react';
+import { showToast } from '@/lib/toast';
 import { useSession } from 'next-auth/react';
 
 interface Product {
@@ -56,30 +57,43 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
   };
 
   const addToCart = async (productId: string) => {
-    if (!session) {
-      // For guests, you could store in localStorage
-      alert('Please sign in to add items to cart');
-      return;
-    }
-
     try {
+      if (!session) {
+        // Guest cart in localStorage with minimal shape used by cart page
+        const key = 'guestCart';
+        const raw = localStorage.getItem(key);
+        const cart = raw ? JSON.parse(raw) : { _id: 'guest', items: [] as any[] };
+        const idx = cart.items.findIndex((it: any) => it.productId?._id === productId);
+        if (idx >= 0) {
+          cart.items[idx].quantity = Math.max(5, (cart.items[idx].quantity || 0) + 5);
+        } else {
+          const prod = products.find(p => p._id === productId);
+          if (!prod) return;
+          cart.items.push({ productId: { _id: prod._id, name: prod.name, price: prod.price, imageUrl: prod.imageUrl, stock: prod.stock }, quantity: 5, deliveryType: 'diambil' });
+        }
+        localStorage.setItem(key, JSON.stringify(cart));
+        showToast('✅ Ditambahkan ke keranjang!', 'success');
+        // Trigger event untuk update badge
+        window.dispatchEvent(new Event('cartUpdated'));
+        return;
+      }
+
       const response = await fetch('/api/cart', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ productId, quantity: 1 }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId, quantity: 5 }),
       });
-
       if (response.ok) {
-        alert('Item added to cart!');
+        showToast('✅ Berhasil ditambahkan ke keranjang!', 'success');
+        // Trigger event untuk update badge
+        window.dispatchEvent(new Event('cartUpdated'));
       } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to add item to cart');
+        const error = await response.json().catch(()=>({}));
+        showToast(error.error || 'Gagal menambahkan ke keranjang.', 'error');
       }
     } catch (error) {
       console.error('Error adding to cart:', error);
-      alert('Failed to add item to cart');
+      showToast('Terjadi kesalahan saat menambahkan ke keranjang.', 'error');
     }
   };
 
@@ -103,7 +117,6 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mb-8">
         {products.map((product) => (
           <div key={product._id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
-            <Link href={`/products/${product._id}`}>
               <div className="relative h-48 w-full">
                 <Image
                   src={product.imageUrl}
@@ -112,15 +125,10 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
                   className="object-cover"
                 />
               </div>
-            </Link>
-            
             <div className="p-4">
-              <Link href={`/products/${product._id}`}>
                 <h3 className="font-semibold text-lg mb-2 hover:text-primary-600 transition-colors">
                   {product.name}
                 </h3>
-              </Link>
-              
               <p className="text-gray-600 text-sm mb-3 line-clamp-2">
                 {product.description}
               </p>

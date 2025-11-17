@@ -1,450 +1,232 @@
-'use client';
-
+"use client";
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { CreditCard, MapPin, User, Check } from 'lucide-react';
+import { ArrowLeft, CreditCard, User } from 'lucide-react';
+import Loading from '@/components/Loading';
 
-interface CartItem {
-  productId: {
-    _id: string;
-    name: string;
-    price: number;
-    imageUrl: string;
-  };
-  quantity: number;
-}
-
-interface Cart {
-  _id: string;
-  items: CartItem[];
-}
+// ---- Types ----
+interface CartItem { productId: { _id: string; name: string; price: number; imageUrl: string; stock: number; }; quantity: number; deliveryType?: 'diambil' | 'disedekahkan'; }
+interface Cart { _id: string; items: CartItem[]; }
+interface OrderData { customerName: string; phoneNumber: string; address: string; notes: string; }
 
 export default function CheckoutPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false);
-  const [orderComplete, setOrderComplete] = useState(false);
-  const [formData, setFormData] = useState({
-    // Shipping Information
-    firstName: '',
-    lastName: '',
-    email: session?.user?.email || '',
-    phone: '',
-    address: '',
-    city: '',
-    zipCode: '',
-    country: 'United States',
-    // Payment Information
-    cardNumber: '',
-    expiryDate: '',
-    cvv: '',
-    cardholderName: '',
-  });
+  const [submitting, setSubmitting] = useState(false);
+  const [orderData, setOrderData] = useState<OrderData>({ customerName: '', phoneNumber: '', address: '', notes: '' });
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [hasSavedProfile, setHasSavedProfile] = useState(false);
+  const [useSavedProfile, setUseSavedProfile] = useState(true);
 
-  useEffect(() => {
-    if (status === 'loading') return;
-    
-    if (!session) {
-      router.push('/auth/signin');
-      return;
-    }
-
-    fetchCart();
-  }, [session, status, router]);
+  // Fetch cart (auth or guest)
+  useEffect(() => { if (status !== 'loading') { fetchCart(); loadSavedProfile(); } }, [status]);
 
   const fetchCart = async () => {
     try {
-      const response = await fetch('/api/cart');
-      const data = await response.json();
-      
-      if (!data.items || data.items.length === 0) {
-        router.push('/cart');
-        return;
+      if (session) {
+        const res = await fetch('/api/cart');
+        const data = await res.json();
+        setCart(data);
+      } else {
+        const guest = localStorage.getItem('guestCart');
+        setCart(guest ? JSON.parse(guest) : { _id: 'guest', items: [] });
       }
-      
-      setCart(data);
-    } catch (error) {
-      console.error('Error fetching cart:', error);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) {
+      console.error('Fetch cart error', e);
+      const guest = typeof window !== 'undefined' ? localStorage.getItem('guestCart') : null;
+      setCart(guest ? JSON.parse(guest) : { _id: 'guest', items: [] });
+    } finally { setLoading(false); }
   };
 
-  const getTotalPrice = () => {
-    if (!cart?.items) return 0;
-    return cart.items.reduce((total, item) => {
-      return total + (item.productId.price * item.quantity);
-    }, 0);
-  };
-
-  const getTotalItems = () => {
-    if (!cart?.items) return 0;
-    return cart.items.reduce((total, item) => total + item.quantity, 0);
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const validateForm = () => {
-    const required = [
-      'firstName', 'lastName', 'email', 'phone', 'address', 
-      'city', 'zipCode', 'cardNumber', 'expiryDate', 'cvv', 'cardholderName'
-    ];
-    
-    for (const field of required) {
-      if (!formData[field as keyof typeof formData]) {
-        alert(`Please fill in ${field.replace(/([A-Z])/g, ' $1').toLowerCase()}`);
-        return false;
+  const loadSavedProfile = () => {
+    try {
+      if (!session?.user?.id) return;
+      const key = `checkoutProfile:${session.user.id}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const saved = JSON.parse(raw) as OrderData;
+        setOrderData(saved);
+        setHasSavedProfile(true);
+        setUseSavedProfile(true);
       }
+    } catch (e) {
+      // ignore
     }
+  };
 
-    // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(formData.email)) {
-      alert('Please enter a valid email address');
-      return false;
-    }
+  // Derived totals
+  const totalPrice = cart?.items.reduce((t,i)=> t + i.productId.price * i.quantity, 0) || 0;
+  const totalItems = cart?.items.reduce((t,i)=> t + i.quantity, 0) || 0;
 
-    // Basic card number validation (16 digits)
-    const cardRegex = /^\d{16}$/;
-    if (!cardRegex.test(formData.cardNumber.replace(/\s/g, ''))) {
-      alert('Please enter a valid 16-digit card number');
-      return false;
-    }
+  // Handlers
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement|HTMLTextAreaElement>) => {
+    const { name, value } = e.target; setOrderData(p => ({...p, [name]: value }));
+  };
 
+  const validate = () => {
+    if (!cart?.items.length) { setErrorMsg('Keranjang kosong.'); return false; }
+    if (!orderData.customerName || !orderData.phoneNumber || !orderData.address) { setErrorMsg('Mohon lengkapi semua field bertanda *.'); return false; }
+    if (!/^0\d{8,13}$/.test(orderData.phoneNumber)) { setErrorMsg('Nomor telepon tidak valid.'); return false; }
     return true;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!validateForm()) return;
-
-    setProcessing(true);
-    
+    setErrorMsg(null); setSuccessMsg(null);
+    if (!validate()) return;
+    setSubmitting(true);
     try {
-      // In a real application, you would process payment here
-      // For demo purposes, we'll just simulate a successful payment
-      
-      const response = await fetch('/api/checkout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        setOrderComplete(true);
-        setTimeout(() => {
-          router.push('/orders');
-        }, 3000);
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Checkout failed');
-      }
-    } catch (error) {
-      console.error('Checkout error:', error);
-      alert('An error occurred during checkout');
-    } finally {
-      setProcessing(false);
-    }
+      const payload = { items: cart!.items, customerInfo: orderData, totalPrice, isGuest: !session };
+      const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload) });
+      if (res.ok) {
+        const order = await res.json();
+        if (session) {
+          await fetch('/api/cart', { method: 'DELETE' });
+          // Simpan profil checkout untuk user login
+          try {
+            if (session.user?.id) {
+              const key = `checkoutProfile:${session.user.id}`;
+              localStorage.setItem(key, JSON.stringify(orderData));
+            }
+          } catch (e) { /* ignore */ }
+        } else {
+          // Remove guest cart then persist guest order reference for later access
+            localStorage.removeItem('guestCart');
+            // Tidak lagi menyimpan daftar pesanan guest
+        }
+        
+        // Trigger event untuk update badge cart dan orders
+        window.dispatchEvent(new Event('cartUpdated'));
+        window.dispatchEvent(new Event('ordersUpdated'));
+        
+        router.push(`/payment-confirmation?orderId=${order._id}`);
+      } else { const err = await res.json(); setErrorMsg(err.message || 'Gagal membuat pesanan.'); }
+    } catch (e) { console.error(e); setErrorMsg('Terjadi kesalahan internal.'); }
+    finally { setSubmitting(false); }
   };
 
-  if (status === 'loading' || loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
-
-  if (!session) {
-    return null;
-  }
-
-  if (orderComplete) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Check size={32} className="text-green-600" />
-          </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">Order Complete!</h1>
-          <p className="text-gray-600 mb-6">Thank you for your purchase. You will be redirected to your orders page.</p>
-          <Link href="/orders" className="btn-primary">
-            View Orders
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const totalPrice = getTotalPrice();
-  const totalItems = getTotalItems();
+  // UI states
+  if (loading) return <Loading />;
+  if (!cart?.items.length) return (
+    <div className="min-h-screen bg-gray-50 py-8"><div className="max-w-4xl mx-auto px-4"><div className="text-center py-16"><h1 className="text-3xl font-bold mb-4">Keranjang Kosong</h1><p className="text-gray-600 mb-8">Tambahkan produk ke keranjang sebelum checkout</p><Link href="/" className="text-white bg-green-600 hover:bg-green-700 px-6 py-3 rounded-md font-semibold">Mulai Belanja</Link></div></div></div>
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Checkout</h1>
-          <p className="text-gray-600">Complete your order</p>
+    <div className="min-h-screen bg-gray-50 py-4 sm:py-8">
+      <div className="max-w-6xl mx-auto px-4">
+        <div className="mb-6 sm:mb-8">
+          <Link href="/cart" className="inline-flex items-center text-green-600 hover:text-green-800 mb-3 sm:mb-4 text-sm sm:text-base">
+            <ArrowLeft size={18} className="mr-2"/>Kembali ke Keranjang
+          </Link>
+          <h1 className="text-2xl sm:text-3xl font-bold text-green-800">Checkout</h1>
+          <p className="text-sm sm:text-base text-green-600">Lengkapi informasi di bawah untuk menyelesaikan pesanan Anda</p>
         </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Checkout Form */}
-          <div className="space-y-6">
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Shipping Information */}
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="flex items-center mb-4">
-                  <MapPin size={20} className="text-primary-600 mr-2" />
-                  <h2 className="text-xl font-semibold">Shipping Information</h2>
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
+          <div className="space-y-4 sm:space-y-6">
+            <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
+              <h2 className="text-lg sm:text-xl font-semibold mb-4 flex items-center">
+                <User className="mr-2 text-green-600" size={20}/>Informasi Pelanggan
+              </h2>
+              {session && hasSavedProfile && (
+                <div className="mb-4 text-xs sm:text-sm flex items-start sm:items-center gap-3 p-3 rounded border border-green-200 bg-green-50">
+                  <input id="useSaved" type="checkbox" className="h-4 w-4 mt-0.5 sm:mt-0 flex-shrink-0" checked={useSavedProfile} onChange={(e)=> setUseSavedProfile(e.target.checked)} />
+                  <label htmlFor="useSaved">Gunakan data tersimpan untuk checkout berikutnya</label>
                 </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      First Name
-                    </label>
-                    <input
-                      type="text"
-                      name="firstName"
-                      value={formData.firstName}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Last Name
-                    </label>
-                    <input
-                      type="text"
-                      name="lastName"
-                      value={formData.lastName}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      name="email"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Phone
-                    </label>
-                    <input
-                      type="tel"
-                      name="phone"
-                      value={formData.phone}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Address
-                    </label>
-                    <input
-                      type="text"
-                      name="address"
-                      value={formData.address}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      City
-                    </label>
-                    <input
-                      type="text"
-                      name="city"
-                      value={formData.city}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      ZIP Code
-                    </label>
-                    <input
-                      type="text"
-                      name="zipCode"
-                      value={formData.zipCode}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
+              )}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Nama Lengkap *</label>
+                  <input 
+                    name="customerName" 
+                    value={orderData.customerName} 
+                    onChange={handleInputChange} 
+                    required 
+                    disabled={Boolean(session) && hasSavedProfile && useSavedProfile} 
+                    className="w-full px-3 py-2 text-sm sm:text-base border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100" 
+                    placeholder="Masukkan nama lengkap"
+                  />
                 </div>
-              </div>
-
-              {/* Payment Information */}
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="flex items-center mb-4">
-                  <CreditCard size={20} className="text-primary-600 mr-2" />
-                  <h2 className="text-xl font-semibold">Payment Information</h2>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Nomor Telepon *</label>
+                  <input 
+                    name="phoneNumber" 
+                    type="tel"
+                    value={orderData.phoneNumber} 
+                    onChange={handleInputChange} 
+                    required 
+                    disabled={Boolean(session) && hasSavedProfile && useSavedProfile} 
+                    className="w-full px-3 py-2 text-sm sm:text-base border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100" 
+                    placeholder="08xxxxxxxxxx"
+                  />
                 </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Cardholder Name
-                    </label>
-                    <input
-                      type="text"
-                      name="cardholderName"
-                      value={formData.cardholderName}
-                      onChange={handleInputChange}
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Card Number
-                    </label>
-                    <input
-                      type="text"
-                      name="cardNumber"
-                      value={formData.cardNumber}
-                      onChange={handleInputChange}
-                      placeholder="1234 5678 9012 3456"
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Expiry Date
-                    </label>
-                    <input
-                      type="text"
-                      name="expiryDate"
-                      value={formData.expiryDate}
-                      onChange={handleInputChange}
-                      placeholder="MM/YY"
-                      required
-                      className="input-field"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      CVV
-                    </label>
-                    <input
-                      type="text"
-                      name="cvv"
-                      value={formData.cvv}
-                      onChange={handleInputChange}
-                      placeholder="123"
-                      required
-                      className="input-field"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Alamat Lengkap *</label>
+                  <textarea 
+                    name="address" 
+                    value={orderData.address} 
+                    onChange={handleInputChange} 
+                    required 
+                    disabled={Boolean(session) && hasSavedProfile && useSavedProfile} 
+                    rows={3} 
+                    className="w-full px-3 py-2 text-sm sm:text-base border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100" 
+                    placeholder="Jalan, Kelurahan, Kecamatan, Kota, Kode Pos"
+                  />
                 </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={processing}
-                className="w-full btn-primary text-lg py-3"
-              >
-                {processing ? 'Processing...' : `Complete Order - $${totalPrice.toFixed(2)}`}
-              </button>
-            </form>
-          </div>
-
-          {/* Order Summary */}
-          <div>
-            <div className="bg-white rounded-lg shadow-md p-6 sticky top-8">
-              <h2 className="text-xl font-semibold mb-4">Order Summary</h2>
-              
-              <div className="space-y-4 mb-6">
-                {cart?.items.map((item) => (
-                  <div key={item.productId._id} className="flex items-center space-x-3">
-                    <div className="relative w-12 h-12 flex-shrink-0">
-                      <Image
-                        src={item.productId.imageUrl}
-                        alt={item.productId.name}
-                        fill
-                        className="object-cover rounded"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
-                        {item.productId.name}
-                      </p>
-                      <p className="text-sm text-gray-500">Qty: {item.quantity}</p>
-                    </div>
-                    <p className="text-sm font-medium">
-                      ${(item.productId.price * item.quantity).toFixed(2)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              
-              <div className="border-t pt-4">
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Subtotal ({totalItems} items)</span>
-                    <span>${totalPrice.toFixed(2)}</span>
-                  </div>
-                  
-                  <div className="flex justify-between">
-                    <span>Shipping</span>
-                    <span>Free</span>
-                  </div>
-                  
-                  <div className="flex justify-between">
-                    <span>Tax</span>
-                    <span>$0.00</span>
-                  </div>
-                  
-                  <div className="border-t pt-2">
-                    <div className="flex justify-between font-semibold text-lg">
-                      <span>Total</span>
-                      <span>${totalPrice.toFixed(2)}</span>
-                    </div>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Catatan Tambahan</label>
+                  <textarea 
+                    name="notes" 
+                    value={orderData.notes} 
+                    onChange={handleInputChange} 
+                    rows={2} 
+                    disabled={Boolean(session) && hasSavedProfile && useSavedProfile} 
+                    className="w-full px-3 py-2 text-sm sm:text-base border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100" 
+                    placeholder="pesan, instruksi khusus, dll (opsional)"
+                  />
                 </div>
               </div>
             </div>
+            
           </div>
-        </div>
+          <div className="space-y-4 sm:space-y-6">
+            <div className="bg-white rounded-lg shadow-md p-4 sm:p-6 lg:sticky lg:top-4">
+              <h2 className="text-lg sm:text-xl font-semibold mb-4">Ringkasan Pesanan</h2>
+              <div className="space-y-3 mb-6 max-h-[300px] sm:max-h-[380px] overflow-auto pr-1">
+                {cart!.items.map(item => (
+                  <div key={item.productId._id} className="flex items-start sm:items-center gap-3 p-3 border border-gray-200 rounded-lg">
+                    <div className="relative w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0">
+                      <Image src={item.productId.imageUrl} alt={item.productId.name} fill className="object-cover rounded" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-medium text-xs sm:text-sm truncate">{item.productId.name}</h3>
+                      <p className="text-xs text-gray-600">{item.quantity} kg × Rp {item.productId.price.toLocaleString('id-ID')}</p>
+                      <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded-full ${item.deliveryType === 'disedekahkan' ? 'bg-yellow-100 text-yellow-800':'bg-green-100 text-green-800'}`}>
+                        {item.deliveryType === 'disedekahkan' ? '🎁 Disedekahkan' : '🚗 Diambil'}
+                      </span>
+                    </div>
+                    <p className="font-semibold text-xs sm:text-sm whitespace-nowrap">Rp {(item.productId.price * item.quantity).toLocaleString('id-ID')}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-3 border-t pt-4 text-xs sm:text-sm">
+                <div className="flex justify-between"><span>Subtotal ({totalItems} item)</span><span>Rp {totalPrice.toLocaleString('id-ID')}</span></div>
+                <div className="border-t pt-3 text-sm sm:text-base font-semibold flex justify-between"><span>Total</span><span className="text-green-600">Rp {totalPrice.toLocaleString('id-ID')}</span></div>
+              </div>
+              {errorMsg && <p className="mt-4 text-xs sm:text-sm text-red-600">{errorMsg}</p>}
+              {successMsg && <p className="mt-4 text-xs sm:text-sm text-green-600">{successMsg}</p>}
+              <button type="submit" disabled={submitting} className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 text-sm sm:text-base rounded-md mt-6 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                {submitting ? 'Memproses...' : 'Buat Pesanan'}
+              </button>
+              <p className="text-xs text-gray-500 mt-3 text-center">Dengan menekan "Buat Pesanan", Anda menyetujui untuk melakukan pembayaran sesuai total di atas.</p>
+            </div>
+          </div>
+        </form>
       </div>
     </div>
   );
