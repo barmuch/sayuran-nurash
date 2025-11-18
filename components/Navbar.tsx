@@ -101,42 +101,27 @@ export default function Navbar() {
 
   return (
     <nav className="bg-white shadow-md border-b-2 border-green-200 sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 lg:px-8">
+        <div className="flex justify-between items-center h-14 sm:h-16">
           {/* Logo */}
-          <Link href="/" className="flex items-center space-x-2 sm:space-x-3">
-            <Image
-              src={logo}
-              alt="Logo Toko Petani Langsung"
-              width={40}
-              height={40}
-              className="rounded-full object-cover border-2 border-green-200 sm:w-12 sm:h-12"
-              priority
-            />
-            <div className="text-base sm:text-xl lg:text-2xl font-bold text-green-700 hidden xs:block">
-              Toko Petani Langsung
+          <Link href="/" className="flex items-center space-x-2 sm:space-x-3 flex-shrink-0">
+            <div className="relative w-16 h-10 sm:w-20 sm:h-12">
+              <Image
+                src={logo}
+                alt="Logo Toko Petani Langsung"
+                fill
+                className="object-contain rounded-lg border-2 border-green-200"
+                priority
+              />
             </div>
-            <div className="text-base font-bold text-green-700 xs:hidden">
-              TPL
+            <div className="text-xs sm:text-sm md:text-base lg:text-lg font-bold text-green-700 leading-tight">
+              <span className="block sm:inline">Toko Petani</span>
+              <span className="hidden xs:inline"> </span>
+              <span className="block sm:inline">Langsung</span>
             </div>
           </Link>
 
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center space-x-8">
-            <Link
-              href="/"
-              className="text-green-700 hover:text-green-600 transition-colors font-medium"
-            >
-              Beranda
-            </Link>
-            <Link
-              href="/products"
-              className="text-green-700 hover:text-green-600 transition-colors font-medium"
-            >
-              Produk
-            </Link>
-          </div>
-
+        
           {/* Right side buttons */}
           <div className="flex items-center space-x-2 sm:space-x-4">
             {/* Orders */}
@@ -273,13 +258,6 @@ export default function Navbar() {
                 onClick={() => setIsMobileMenuOpen(false)}
               >
                 🏠 Beranda
-              </Link>
-              <Link
-                href="/products"
-                className="block text-green-700 hover:text-green-600 transition-colors font-medium py-2 border-b border-green-100"
-                onClick={() => setIsMobileMenuOpen(false)}
-              >
-                🛒 Produk
               </Link>
 
               {session ? (
