@@ -29,6 +29,11 @@ export default function ProductGrid({ searchQuery = '', categoryFilter = '' }: P
   const [totalPages, setTotalPages] = useState(1);
   const { data: session } = useSession();
 
+  // Reset ke halaman 1 saat search atau filter berubah
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, categoryFilter]);
+
   useEffect(() => {
     fetchProducts();
   }, [searchQuery, categoryFilter, currentPage]);

@@ -1,7 +1,13 @@
+'use client';
+
+import { useState } from 'react';
 import ProductGrid from '@/components/ProductGrid';
 import SearchAndFilter from '@/components/SearchAndFilter';
 
 export default function Home() {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+
   return (
     <div className="min-h-screen bg-green-50">
       {/* Hero Section */}
@@ -43,8 +49,8 @@ export default function Home() {
             </div>
           </div>
           
-          <SearchAndFilter />
-          <ProductGrid />
+          <SearchAndFilter onSearch={setSearchQuery} />
+          <ProductGrid searchQuery={searchQuery} categoryFilter={categoryFilter} />
         </div>
       </section>
 
