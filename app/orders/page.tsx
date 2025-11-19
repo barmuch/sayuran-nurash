@@ -21,6 +21,9 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const ordersPerPage = 5;
 
   useEffect(() => {
     if (status === 'loading') return;
@@ -31,14 +34,27 @@ export default function OrdersPage() {
     }
 
     fetchOrders();
-  }, [session, status, router]);
+  }, [session, status, router, currentPage]);
 
   const fetchOrders = async () => {
     try {
+      setLoading(true);
       const response = await fetch('/api/orders');
       if (response.ok) {
         const data = await response.json();
-        setOrders(data);
+        // Sort by createdAt descending (newest first)
+        const sortedOrders = data.sort((a: Order, b: Order) => 
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        
+        // Calculate pagination
+        const total = sortedOrders.length;
+        setTotalPages(Math.ceil(total / ordersPerPage));
+        
+        // Get current page orders
+        const startIndex = (currentPage - 1) * ordersPerPage;
+        const endIndex = startIndex + ordersPerPage;
+        setOrders(sortedOrders.slice(startIndex, endIndex));
       } else {
         console.error('Failed to fetch orders');
       }
@@ -186,21 +202,28 @@ export default function OrdersPage() {
                   <div className="space-y-3 sm:space-y-4">
                     {order.items.map((item, index) => (
                       <div key={index} className="flex items-center space-x-3 sm:space-x-4">
-                        <div className="relative w-12 h-12 sm:w-16 sm:h-16 flex-shrink-0">
-                          <Image
-                            src={item.productId.imageUrl}
-                            alt={item.productId.name}
-                            fill
-                            className="object-cover rounded"
-                          />
+                        <div className="relative w-12 h-12 sm:w-16 sm:h-16 flex-shrink-0 bg-gray-100 rounded">
+                          {item.productId?.imageUrl ? (
+                            <Image
+                              src={item.productId.imageUrl}
+                              alt={item.productId?.name || 'Product'}
+                              fill
+                              className="object-cover rounded"
+                              unoptimized
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-gray-400">
+                              <Package size={20} />
+                            </div>
+                          )}
                         </div>
                         
                         <div className="flex-1 min-w-0">
                           <Link
-                            href={`/products/${item.productId._id}`}
+                            href={`/products/${item.productId?._id || '#'}`}
                             className="text-sm sm:text-base md:text-lg font-medium text-gray-900 hover:text-primary-600 transition-colors block truncate"
                           >
-                            {item.productId.name}
+                            {item.productId?.name || 'Produk tidak tersedia'}
                           </Link>
                           <p className="text-xs sm:text-sm text-gray-600">{item.quantity} × Rp {item.price.toLocaleString('id-ID')}</p>
                           {item.deliveryType && (
@@ -240,6 +263,59 @@ export default function OrdersPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {!loading && orders.length > 0 && totalPages > 1 && (
+          <div className="mt-8 flex justify-center items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className="px-3 sm:px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 text-sm sm:text-base transition-colors"
+            >
+              ← Previous
+            </button>
+            
+            <div className="flex items-center gap-1 sm:gap-2">
+              {[...Array(totalPages)].map((_, i) => {
+                const pageNum = i + 1;
+                // Show first, last, current, and adjacent pages
+                if (
+                  pageNum === 1 ||
+                  pageNum === totalPages ||
+                  (pageNum >= currentPage - 1 && pageNum <= currentPage + 1)
+                ) {
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`px-3 sm:px-4 py-2 rounded-lg text-sm sm:text-base transition-colors ${
+                        currentPage === pageNum
+                          ? 'bg-green-600 text-white font-semibold'
+                          : 'border border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                } else if (
+                  pageNum === currentPage - 2 ||
+                  pageNum === currentPage + 2
+                ) {
+                  return <span key={pageNum} className="px-2">...</span>;
+                }
+                return null;
+              })}
+            </div>
+            
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className="px-3 sm:px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 text-sm sm:text-base transition-colors"
+            >
+              Next →
+            </button>
           </div>
         )}
       </div>
